@@ -1,4 +1,6 @@
 jdk:
   - openjdk17
+env:
+  RIFT_JITPACK_BUILD: "true"
 install:
-  - ./gradlew :library:publishReleasePublicationToMavenLocal -x :library:signReleasePublication
+  - ./gradlew :library:publishReleasePublicationToMavenLocal

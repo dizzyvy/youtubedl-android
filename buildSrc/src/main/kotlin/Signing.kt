@@ -7,6 +7,8 @@ import org.gradle.kotlin.dsl.getByType
 import org.gradle.plugins.signing.SigningExtension
 
 internal fun Project.configureSigning() {
+    if (System.getenv("RIFT_JITPACK_BUILD") == "true") return
+
     val publishing = extensions.getByType<PublishingExtension>()
 
     extensions.getByType<SigningExtension>().run {
