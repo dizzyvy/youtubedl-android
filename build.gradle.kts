@@ -3,6 +3,7 @@ buildscript {
     val kotlin_version by extra("1.7.22")
     repositories {
         google()
+        maven("https://maven-central.storage-download.googleapis.com/maven2")
         mavenCentral()
         maven {
             isAllowInsecureProtocol = true
@@ -70,5 +71,4 @@ tasks.register("packagePublishedArtifacts") {
     }
 
 }
-
 
