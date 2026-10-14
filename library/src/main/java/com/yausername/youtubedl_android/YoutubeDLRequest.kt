@@ -4,6 +4,10 @@ class YoutubeDLRequest {
     private val urls: List<String>
     private val options = YoutubeDLOptions()
     private val customCommandList: MutableList<String> = ArrayList()
+    internal var timingTraceId: String? = null
+        private set
+    internal var timingListener: ((YoutubeDLTimingEvent) -> Unit)? = null
+        private set
 
     constructor(url: String) {
         urls = listOf(url)
@@ -11,6 +15,18 @@ class YoutubeDLRequest {
 
     constructor(urls: List<String>) {
         this.urls = urls
+    }
+
+    fun setTimingListener(
+        traceId: String,
+        listener: (YoutubeDLTimingEvent) -> Unit,
+    ): YoutubeDLRequest {
+        require(traceId.matches(Regex("[a-f0-9]{8}"))) {
+            "Timing trace IDs must be eight lowercase hexadecimal characters."
+        }
+        timingTraceId = traceId
+        timingListener = listener
+        return this
     }
 
     fun addOption(option: String, argument: String): YoutubeDLRequest {

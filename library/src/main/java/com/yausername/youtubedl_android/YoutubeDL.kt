@@ -2,6 +2,7 @@ package com.yausername.youtubedl_android
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.yausername.youtubedl_android.mapper.VideoInfo
 import com.yausername.youtubedl_common.SharedPrefsHelper
@@ -24,7 +25,15 @@ object YoutubeDL {
     private var ENV_SSL_CERT_FILE: String? = null
     private var ENV_PYTHONHOME: String? = null
     private var TMPDIR: String = ""
+    private var timingInstrumentationEnabled = false
     private val idProcessMap = Collections.synchronizedMap(HashMap<String, Process>())
+
+    fun setTimingInstrumentationEnabled(enabled: Boolean) {
+        check(!initialized || timingInstrumentationEnabled == enabled) {
+            "Timing instrumentation must be configured before YoutubeDL initialization."
+        }
+        timingInstrumentationEnabled = enabled
+    }
 
     @Synchronized
     @Throws(YoutubeDLException::class)
@@ -57,6 +66,10 @@ object YoutubeDL {
     fun init_ytdlp(appContext: Context, ytdlpDir: File) {
         if (!ytdlpDir.exists()) ytdlpDir.mkdirs()
         val ytdlpBinary = File(ytdlpDir, ytdlpBin)
+        if (timingInstrumentationEnabled) {
+            installInstrumentedYtDlp(appContext, ytdlpDir, ytdlpBinary)
+            return
+        }
         if (!ytdlpBinary.exists()) {
             try {
                 val inputStream =
@@ -66,6 +79,44 @@ object YoutubeDL {
                 FileUtils.deleteQuietly(ytdlpDir)
                 throw YoutubeDLException("failed to initialize", e)
             }
+        }
+    }
+
+    private fun installInstrumentedYtDlp(
+        appContext: Context,
+        ytdlpDir: File,
+        ytdlpBinary: File,
+    ) {
+        val marker = File(ytdlpDir, ".rift-timing-runtime")
+        val candidate = File(ytdlpDir, "$ytdlpBin.instrumented")
+        val backup = File(ytdlpDir, "$ytdlpBin.previous")
+        if (!ytdlpBinary.exists() && backup.exists()) backup.renameTo(ytdlpBinary)
+        if (ytdlpBinary.isFile && marker.isFile &&
+            marker.readText() == INSTRUMENTED_YTDLP_VERSION
+        ) {
+            FileUtils.deleteQuietly(backup)
+            return
+        }
+
+        try {
+            appContext.resources.openRawResource(R.raw.ytdlp_instrumented).use { input ->
+                FileUtils.copyInputStreamToFile(input, candidate)
+            }
+            FileUtils.deleteQuietly(backup)
+            val hadPreviousBinary = ytdlpBinary.exists()
+            if (hadPreviousBinary && !ytdlpBinary.renameTo(backup)) {
+                throw IOException("Could not preserve the existing yt-dlp runtime.")
+            }
+            if (!candidate.renameTo(ytdlpBinary)) {
+                if (hadPreviousBinary) backup.renameTo(ytdlpBinary)
+                throw IOException("Could not install the instrumented yt-dlp runtime.")
+            }
+            marker.writeText(INSTRUMENTED_YTDLP_VERSION)
+            FileUtils.deleteQuietly(backup)
+        } catch (error: Exception) {
+            FileUtils.deleteQuietly(candidate)
+            if (!ytdlpBinary.exists() && backup.exists()) backup.renameTo(ytdlpBinary)
+            throw YoutubeDLException("failed to initialize instrumented yt-dlp", error)
         }
     }
 
@@ -180,6 +231,66 @@ object YoutubeDL {
         redirectErrorStream: Boolean = false,
         callback: ((Float, Long, String) -> Unit)? = null
     ) : YoutubeDLResponse {
+        fun beginTimingSpan(name: String): Long? {
+            val listener = request.timingListener ?: return null
+            val now = SystemClock.elapsedRealtimeNanos()
+            listener(
+                YoutubeDLTimingEvent(
+                    name = "${name}_started",
+                    operationId = 0,
+                    monotonicTimeNs = now,
+                    clockSource = "android_elapsed_realtime",
+                    durationMs = null,
+                    outcome = "started",
+                    exceptionType = null,
+                    category = null,
+                    value = null,
+                ),
+            )
+            return now
+        }
+
+        fun finishTimingSpan(
+            name: String,
+            startedAt: Long?,
+            outcome: String = "success",
+            error: Throwable? = null,
+        ) {
+            val listener = request.timingListener ?: return
+            if (startedAt == null) return
+            val now = SystemClock.elapsedRealtimeNanos()
+            listener(
+                YoutubeDLTimingEvent(
+                    name = "${name}_finished",
+                    operationId = 0,
+                    monotonicTimeNs = now,
+                    clockSource = "android_elapsed_realtime",
+                    durationMs = (now - startedAt) / 1_000_000,
+                    outcome = outcome,
+                    exceptionType = error?.javaClass?.simpleName?.takeIf { it.isNotBlank() },
+                    category = null,
+                    value = null,
+                ),
+            )
+        }
+
+        fun reportTimingEvent(name: String, outcome: String, value: Long? = null) {
+            val listener = request.timingListener ?: return
+            listener(
+                YoutubeDLTimingEvent(
+                    name = name,
+                    operationId = 0,
+                    monotonicTimeNs = SystemClock.elapsedRealtimeNanos(),
+                    clockSource = "android_elapsed_realtime",
+                    durationMs = null,
+                    outcome = outcome,
+                    exceptionType = null,
+                    category = null,
+                    value = value,
+                ),
+            )
+        }
+
         assertInit()
         if (processId != null && idProcessMap.containsKey(processId)) throw YoutubeDLException("Process ID already exists")
         // disable caching unless explicitly requested
@@ -220,29 +331,69 @@ object YoutubeDL {
             this["PYTHONHOME"] = ENV_PYTHONHOME
             this["HOME"] = ENV_PYTHONHOME
             this["TMPDIR"] = TMPDIR
+            request.timingTraceId?.let { this["RIFT_DOWNLOADER_TRACE_ID"] = it }
         }
 
+        val processLaunchStartedAt = beginTimingSpan("wrapper_process_launch")
         process = try {
             processBuilder.start()
         } catch (e: IOException) {
+            finishTimingSpan("wrapper_process_launch", processLaunchStartedAt, "failed", e)
             throw YoutubeDLException(e)
         }
+        finishTimingSpan("wrapper_process_launch", processLaunchStartedAt)
         if (processId != null) {
             idProcessMap[processId] = process
         }
         val outStream = process.inputStream
         val errStream = process.errorStream
+        val stdoutReaderStartedAt = beginTimingSpan("wrapper_stdout_reader")
         val stdOutProcessor = StreamProcessExtractor(outBuffer, outStream, callback)
-        val stdErrProcessor = StreamGobbler(errBuffer, errStream)
-        exitCode = try {
-            stdOutProcessor.join()
+        val stderrReaderStartedAt = beginTimingSpan("wrapper_stderr_reader")
+        val stdErrProcessor =
+            StreamGobbler(
+                buffer = errBuffer,
+                stream = errStream,
+                timingTraceId = request.timingTraceId,
+                timingListener = request.timingListener,
+            )
+        var stdoutReaderFinished = false
+        var stderrReaderFinished = false
+            var processWaitStartedAt: Long? = null
+            exitCode = try {
+                stdOutProcessor.join()
+                finishTimingSpan("wrapper_stdout_reader", stdoutReaderStartedAt)
+            stdoutReaderFinished = true
             stdErrProcessor.join()
-            process.waitFor()
+            finishTimingSpan("wrapper_stderr_reader", stderrReaderStartedAt)
+            stderrReaderFinished = true
+            processWaitStartedAt = beginTimingSpan("wrapper_process_wait")
+            process.waitFor().also {
+                finishTimingSpan("wrapper_process_wait", processWaitStartedAt)
+            }
         } catch (e: InterruptedException) {
+            if (!stdoutReaderFinished) {
+                finishTimingSpan("wrapper_stdout_reader", stdoutReaderStartedAt, "interrupted", e)
+            }
+            if (!stderrReaderFinished) {
+                finishTimingSpan("wrapper_stderr_reader", stderrReaderStartedAt, "interrupted", e)
+            }
+            finishTimingSpan("wrapper_process_wait", processWaitStartedAt, "interrupted", e)
             process.destroy()
             if (processId != null) idProcessMap.remove(processId)
             throw e
         }
+        val processWasCanceled = processId != null && !idProcessMap.containsKey(processId)
+        reportTimingEvent(
+            name = "wrapper_process_exited",
+            outcome =
+                when {
+                    processWasCanceled -> "cancelled"
+                    exitCode == 0 -> "success"
+                    else -> "failed"
+                },
+            value = exitCode.toLong(),
+        )
         val out = outBuffer.toString()
         val err = errBuffer.toString()
         if (exitCode > 0) {
@@ -267,6 +418,7 @@ object YoutubeDL {
         updateChannel: UpdateChannel = UpdateChannel.STABLE
     ): UpdateStatus? {
         assertInit()
+        if (timingInstrumentationEnabled) return UpdateStatus.ALREADY_UP_TO_DATE
         return try {
             YoutubeDLUpdater.update(appContext, updateChannel)
         } catch (e: IOException) {
@@ -317,6 +469,7 @@ object YoutubeDL {
     private const val aria2cDirName = "aria2c"
     const val ytdlpDirName = "yt-dlp"
     const val ytdlpBin = "yt-dlp"
+    const val INSTRUMENTED_YTDLP_VERSION = "2026.10.10.233141-rift-timing"
     private const val pythonLibVersion = "pythonLibVersion"
     val objectMapper = ObjectMapper()
 

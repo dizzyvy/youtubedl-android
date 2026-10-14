@@ -35,7 +35,7 @@ configurePublishing {
 dependencies {
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
 
-    implementation(project(":common"))
+    implementation("io.github.junkfood02.youtubedl-android:common:0.18.1")
 
     implementation("androidx.appcompat:appcompat:${rootProject.extra["appCompatVer"]}")
     implementation("androidx.core:core-ktx:${rootProject.extra["coreKtxVer"]}")
