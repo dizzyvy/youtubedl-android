@@ -231,6 +231,10 @@ object YoutubeDL {
         redirectErrorStream: Boolean = false,
         callback: ((Float, Long, String) -> Unit)? = null
     ) : YoutubeDLResponse {
+        val invocationId =
+            java.util.UUID.randomUUID().toString().replace("-", "")
+        val executionKind = request.timingExecutionKind
+
         fun beginTimingSpan(name: String): Long? {
             val listener = request.timingListener ?: return null
             val now = SystemClock.elapsedRealtimeNanos()
@@ -245,6 +249,8 @@ object YoutubeDL {
                     exceptionType = null,
                     category = null,
                     value = null,
+                    invocationId = invocationId,
+                    executionKind = executionKind,
                 ),
             )
             return now
@@ -270,6 +276,8 @@ object YoutubeDL {
                     exceptionType = error?.javaClass?.simpleName?.takeIf { it.isNotBlank() },
                     category = null,
                     value = null,
+                    invocationId = invocationId,
+                    executionKind = executionKind,
                 ),
             )
         }
@@ -287,6 +295,8 @@ object YoutubeDL {
                     exceptionType = null,
                     category = null,
                     value = value,
+                    invocationId = invocationId,
+                    executionKind = executionKind,
                 ),
             )
         }
@@ -331,7 +341,11 @@ object YoutubeDL {
             this["PYTHONHOME"] = ENV_PYTHONHOME
             this["HOME"] = ENV_PYTHONHOME
             this["TMPDIR"] = TMPDIR
-            request.timingTraceId?.let { this["RIFT_DOWNLOADER_TRACE_ID"] = it }
+            request.timingTraceId?.let {
+                this["RIFT_DOWNLOADER_TRACE_ID"] = it
+                this["RIFT_DOWNLOADER_INVOCATION_ID"] = invocationId
+                this["RIFT_DOWNLOADER_EXECUTION_KIND"] = executionKind ?: "other"
+            }
         }
 
         val processLaunchStartedAt = beginTimingSpan("wrapper_process_launch")
@@ -355,6 +369,8 @@ object YoutubeDL {
                 buffer = errBuffer,
                 stream = errStream,
                 timingTraceId = request.timingTraceId,
+                invocationId = invocationId,
+                executionKind = executionKind,
                 timingListener = request.timingListener,
             )
         var stdoutReaderFinished = false

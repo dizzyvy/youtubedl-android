@@ -10,4 +10,13 @@ data class YoutubeDLTimingEvent(
     val exceptionType: String?,
     val category: String?,
     val value: Long?,
+    val invocationId: String? = null,
+    val executionKind: String? = null,
+    val parentOperationId: Long? = null,
+    val extractorKey: String? = null,
+    val client: String? = null,
+    val provider: String? = null,
+    val relatedOperationId: Long? = null,
+    val exitCode: Int? = null,
+    val exitStatus: String? = null,
 )

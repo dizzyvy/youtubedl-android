@@ -6,6 +6,8 @@ class YoutubeDLRequest {
     private val customCommandList: MutableList<String> = ArrayList()
     internal var timingTraceId: String? = null
         private set
+    internal var timingExecutionKind: String? = null
+        private set
     internal var timingListener: ((YoutubeDLTimingEvent) -> Unit)? = null
         private set
 
@@ -17,14 +19,20 @@ class YoutubeDLRequest {
         this.urls = urls
     }
 
+    @JvmOverloads
     fun setTimingListener(
         traceId: String,
         listener: (YoutubeDLTimingEvent) -> Unit,
+        executionKind: String = "other",
     ): YoutubeDLRequest {
         require(traceId.matches(Regex("[a-f0-9]{8}"))) {
             "Timing trace IDs must be eight lowercase hexadecimal characters."
         }
+        require(executionKind in setOf("metadata", "download", "other")) {
+            "Timing execution kind must be metadata, download, or other."
+        }
         timingTraceId = traceId
+        timingExecutionKind = executionKind
         timingListener = listener
         return this
     }
